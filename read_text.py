@@ -95,7 +95,7 @@ class ANPR_GUI:
     def __init__(self, root):
         self.root = root
         self.root.title("АвтоМудень")
-        self.root.geometry("1920x1080")
+        self.root.geometry("910x605")
 
         print("Загружаем YOLOv8...")
         self.detector = YOLO(Config.YOLO_MODEL_PATH)
