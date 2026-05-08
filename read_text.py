@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox, ttk
 import cv2
 from PIL import Image, ImageTk
 from ultralytics import YOLO
@@ -8,6 +8,7 @@ import torch.nn as nn
 from torchvision import transforms
 import pystray
 from PIL import Image as PILImage
+import copy
 
 # ────────── Конфиг ──────────
 class Config:
@@ -17,6 +18,25 @@ class Config:
     OCR_IMG_WIDTH = 128
     OCR_ALPHABET = '0123456789ABCEHKMOPTXY'
     DEVICE = torch.device("cpu")
+
+    # Временная БД (потом заменим на PostgreSQL)
+    TEMP_DB = {
+        "A123BC": {
+            "name": "Иван Иванов",
+            "rating": 4.5,
+            "reviews": [
+                {"author": "Петр", "text": "Отличный водитель!", "approved": True},
+                {"author": "Мария", "text": "Паркуется как бог", "approved": False}
+            ]
+        },
+        "B777OO": {
+            "name": "Сергей Смирнов",
+            "rating": 3.2,
+            "reviews": [
+                {"author": "Аноним", "text": "Нормально", "approved": True}
+            ]
+        }
+    }
 
 # ────────── CRNN ──────────
 class CRNN(nn.Module):
@@ -93,89 +113,304 @@ class ANPR_GUI:
         self.ocr=CRNNRecognizer(Config.OCR_MODEL_PATH,Config.OCR_ALPHABET)
         print("Готово!")
 
-        self.canvas=tk.Canvas(root,width=910,height=605,highlightthickness=0)
-        self.canvas.pack()
-
-        # ────────── Загрузка картинок ──────────
+        # ────────── Загрузка изображений (сохраняем как атрибуты) ──────────
         self.bg=ImageTk.PhotoImage(Image.open("bg_main.png"))
         self.top_bar=ImageTk.PhotoImage(Image.open("top_bar.png"))
-
         self.btn_upload=ImageTk.PhotoImage(Image.open("btn_upload.png"))
         self.btn_upload_h=ImageTk.PhotoImage(Image.open("btn_upload_hover.png"))
-
         self.btn_manual=ImageTk.PhotoImage(Image.open("btn_manual.png"))
         self.btn_manual_h=ImageTk.PhotoImage(Image.open("btn_manual_hover.png"))
-
         self.btn_close=ImageTk.PhotoImage(Image.open("btn_close.png"))
         self.btn_close_h=ImageTk.PhotoImage(Image.open("btn_close_hover.png"))
-
         self.btn_min=ImageTk.PhotoImage(Image.open("btn_min.png"))
         self.btn_min_h=ImageTk.PhotoImage(Image.open("btn_min_hover.png"))
 
-        # ────────── Рисуем ──────────
-        self.canvas.create_image(0,0,anchor=tk.NW,image=self.bg)
-        self.top_bar_id=self.canvas.create_image(0,0,anchor=tk.NW,image=self.top_bar)
+        self.canvas=tk.Canvas(root,width=910,height=605,highlightthickness=0)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.upload_id=self.canvas.create_image(455,257,image=self.btn_upload)
-        self.manual_id=self.canvas.create_image(455,545,image=self.btn_manual)
+        # Поле ручного ввода (создаём один раз)
+        self.manual_number = tk.StringVar()
+        self.manual_entry = tk.Entry(self.root, font=("Arial", 14), justify="center",
+                                     textvariable=self.manual_number)
+        self.manual_entry.bind("<Return>", self.submit_number)
 
-        self.close_id=self.canvas.create_image(899,12,image=self.btn_close)
-        self.min_id=self.canvas.create_image(850,12,image=self.btn_min)
-
-        # Поле для ручного ввода (изначально скрыто)
-        self.manual_entry = tk.Entry(self.root, font=("Arial", 14), justify="center")
-        self.manual_entry_window = self.canvas.create_window(455, 575, window=self.manual_entry, state="hidden", width=200)
-        self.manual_number = tk.StringVar()   # Переменная для хранения номера
-        self.manual_entry.config(textvariable=self.manual_number)
-
-        # Идентификаторы для загруженной картинки и крестика (будут созданы позже)
+        # Флаги и дополнительные атрибуты
         self.result_image_id = None
         self.clear_btn_id = None
-
-        # ────────── Hover ──────────
-        self.add_hover(self.upload_id,self.btn_upload,self.btn_upload_h)
-        self.add_hover(self.manual_id,self.btn_manual,self.btn_manual_h)
-        self.add_hover(self.close_id,self.btn_close,self.btn_close_h)
-        self.add_hover(self.min_id,self.btn_min,self.btn_min_h)
-
-        # ────────── Клики ──────────
-        self.canvas.tag_bind(self.upload_id,"<Button-1>",self.load_image)
-        self.canvas.tag_bind(self.manual_id,"<Button-1>",self.toggle_manual_entry)
-        self.canvas.tag_bind(self.close_id,"<Button-1>",lambda e:self.root.destroy())
-        self.canvas.tag_bind(self.min_id,"<Button-1>",self.minimize_to_tray)
-
-        # ────────── Перетаскивание ──────────
-        self.canvas.tag_bind(self.top_bar_id,"<ButtonPress-1>",self.start_move)
-        self.canvas.tag_bind(self.top_bar_id,"<B1-Motion>",self.on_move)
-
-        self.offset_x=0
-        self.offset_y=0
+        self.profile_btn_id = None
+        self.profile_page_active = False
+        self.scrollbar = None
+        self.back_btn = None
 
         # ────────── Трей ──────────
-        self.tray_icon = None
-        # Загружаем иконку для трея (должен быть файл icon.ico или png)
         try:
-            tray_img = PILImage.open("icon.ico")   # Путь к иконке
+            tray_img = PILImage.open("icon.ico")
         except:
-            tray_img = PILImage.new("RGB", (64,64), "blue")  # Заглушка
+            tray_img = PILImage.new("RGB", (64,64), "blue")
         self.tray_menu = pystray.Menu(
             pystray.MenuItem("Открыть", self.show_window),
+            pystray.MenuItem("Модерация", self.open_moderation),
             pystray.MenuItem("Выход", self.quit_app)
         )
         self.tray_icon = pystray.Icon("ANPR", tray_img, "ANPR", self.tray_menu)
+        self.tray_thread = None
 
-        self.root.protocol('WM_DELETE_WINDOW', self.quit_app)  # чтобы при закрытии окна всё корректно завершалось
+        self.root.protocol('WM_DELETE_WINDOW', self.quit_app)
 
-    # ────────── Hover функция ──────────
+        # Построить главный экран
+        self.show_main()
+
+    # ────────── Главный экран ──────────
+    def show_main(self):
+        # Убираем элементы страницы профиля, если они есть
+        if self.profile_page_active:
+            self.canvas.unbind_all("<MouseWheel>")
+            self.canvas.unbind_all("<Button-4>")
+            self.canvas.unbind_all("<Button-5>")
+            if self.scrollbar:
+                self.scrollbar.place_forget()
+                self.scrollbar.destroy()
+                self.scrollbar = None
+            if self.back_btn:
+                self.back_btn.place_forget()
+                self.back_btn.destroy()
+                self.back_btn = None
+            self.profile_page_active = False
+
+        # Очищаем canvas и настраиваем его для главного экрана
+        self.canvas.delete("all")
+        self.canvas.config(width=910, height=605, yscrollcommand="")
+
+        # Рисуем фон и верхнюю панель
+        self.canvas.create_image(0,0,anchor=tk.NW,image=self.bg)
+        self.top_bar_id = self.canvas.create_image(0,0,anchor=tk.NW,image=self.top_bar)
+
+        # Кнопки
+        self.upload_id = self.canvas.create_image(455,257,image=self.btn_upload)
+        self.manual_id = self.canvas.create_image(455,545,image=self.btn_manual)
+        self.close_id = self.canvas.create_image(899,12,image=self.btn_close)
+        self.min_id = self.canvas.create_image(850,12,image=self.btn_min)
+
+        # Поле ручного ввода (скрыто по умолчанию)
+        self.manual_entry_window = self.canvas.create_window(455, 575, window=self.manual_entry,
+                                                             state="hidden", width=200)
+
+        # Кнопка "Смотреть профиль" (скрыта по умолчанию)
+        self.profile_btn_id = self.canvas.create_text(455, 320, text="[ Смотреть профиль ]",
+                                                      font=("Arial", 12, "underline"), fill="blue",
+                                                      activefill="darkblue", state="hidden")
+        self.canvas.tag_bind(self.profile_btn_id, "<Button-1>", self.submit_number)
+
+        # Ховер-эффекты
+        self.add_hover(self.upload_id, self.btn_upload, self.btn_upload_h)
+        self.add_hover(self.manual_id, self.btn_manual, self.btn_manual_h)
+        self.add_hover(self.close_id, self.btn_close, self.btn_close_h)
+        self.add_hover(self.min_id, self.btn_min, self.btn_min_h)
+
+        # События
+        self.canvas.tag_bind(self.upload_id, "<Button-1>", self.load_image)
+        self.canvas.tag_bind(self.manual_id, "<Button-1>", self.toggle_manual_entry)
+        self.canvas.tag_bind(self.close_id, "<Button-1>", lambda e: self.root.destroy())
+        self.canvas.tag_bind(self.min_id, "<Button-1>", self.minimize_to_tray)
+        self.canvas.tag_bind(self.top_bar_id, "<ButtonPress-1>", self.start_move)
+        self.canvas.tag_bind(self.top_bar_id, "<B1-Motion>", self.on_move)
+
+        self.offset_x = 0
+        self.offset_y = 0
+        self.result_image_id = None
+        self.clear_btn_id = None
+
+    # ────────── Страница профиля ──────────
+    def show_profile(self, number):
+        self.profile_page_active = True
+        self.canvas.delete("all")
+
+        # Настраиваем canvas под скроллбар
+        self.canvas.config(width=895, height=605)
+        self.scrollbar = tk.Scrollbar(self.root, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.scrollbar.place(x=895, y=0, height=605)
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        # Кнопка назад (поверх всего)
+        self.back_btn = tk.Label(self.root, text="← Назад", font=("Arial", 12, "underline"),
+                                 fg="blue", bg="#f0f0f0", cursor="hand2")
+        self.back_btn.place(x=10, y=10)
+        self.back_btn.bind("<Button-1>", lambda e: self.show_main())
+
+        # Прокручиваемый фрейм
+        profile_frame = tk.Frame(self.canvas, bg='#f0f0f0')
+        self.canvas.create_window((0, 0), window=profile_frame, anchor='nw')
+        profile_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+
+        # Получаем данные пользователя
+        user_data = self.get_user_data(number)
+
+        # Номер машины
+        tk.Label(profile_frame, text=number, font=("Arial", 28, "bold"), bg='#f0f0f0').pack(pady=(20, 10))
+
+        # Рейтинг
+        rating = user_data.get("rating", 0.0)
+        tk.Label(profile_frame, text=f"Рейтинг: {rating}", font=("Arial", 16), bg='#f0f0f0').pack(pady=5)
+
+        # Разделитель
+        ttk.Separator(profile_frame, orient='horizontal').pack(fill='x', padx=20, pady=10)
+
+        # Блок отзывов
+        reviews_frame = tk.Frame(profile_frame, bg='#f0f0f0')
+        reviews_frame.pack(fill='both', expand=True, padx=20, pady=10)
+
+        def refresh_reviews():
+            for widget in reviews_frame.winfo_children():
+                widget.destroy()
+            approved = [r for r in user_data["reviews"] if r["approved"]]
+            if not approved:
+                tk.Label(reviews_frame, text="Нет отзывов", bg='#f0f0f0', font=("Arial", 10)).pack()
+            for rev in approved:
+                cont = tk.Frame(reviews_frame, bg='white', relief='groove', bd=2)
+                cont.pack(fill='x', pady=5, padx=5)
+                tk.Label(cont, text=f"Автор: {rev['author']}", bg='white',
+                         font=("Arial", 10, "bold")).pack(anchor='w')
+                tk.Label(cont, text=rev['text'], bg='white', font=("Arial", 9),
+                         wraplength=800, justify='left').pack(anchor='w', padx=10, pady=5)
+
+        refresh_reviews()
+
+        # Кнопка открытия формы отзыва
+        form_visible = False
+        review_form_frame = tk.Frame(profile_frame, bg='#e0e0e0', relief='sunken', bd=2)
+
+        def toggle_review_form():
+            nonlocal form_visible
+            if form_visible:
+                review_form_frame.pack_forget()
+                form_visible = False
+            else:
+                review_form_frame.pack(before=review_btn, fill='x', padx=20, pady=10)
+                form_visible = True
+
+        review_btn = tk.Button(profile_frame, text="Оставить отзыв", command=toggle_review_form)
+        review_btn.pack(pady=10)
+
+        # Поля формы
+        tk.Label(review_form_frame, text="Автор:", bg='#e0e0e0').pack(anchor='w', padx=5, pady=2)
+        author_entry = tk.Entry(review_form_frame, width=30)
+        author_entry.pack(padx=5, pady=2)
+        author_entry.insert(0, "Аноним")
+        tk.Label(review_form_frame, text="Отзыв:", bg='#e0e0e0').pack(anchor='w', padx=5, pady=2)
+        text_entry = tk.Text(review_form_frame, height=4, width=60)
+        text_entry.pack(padx=5, pady=2)
+
+        def submit_review():
+            author = author_entry.get().strip()
+            text = text_entry.get("1.0", "end-1c").strip()
+            if not text:
+                return
+            self.add_review(number, author if author else "Аноним", text)
+            review_form_frame.pack_forget()
+            nonlocal form_visible
+            form_visible = False
+            # обновляем отзывы на странице
+            nonlocal user_data
+            user_data = self.get_user_data(number)
+            refresh_reviews()
+            messagebox.showinfo("Отзыв", "Отзыв отправлен на модерацию")
+
+        tk.Button(review_form_frame, text="Отправить", command=submit_review).pack(pady=5)
+
+        # Прокрутка колесом мыши
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel_profile)
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel_profile)
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel_profile)
+
+        self.root.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_mousewheel_profile(self, event):
+        if self.profile_page_active:
+            if event.num == 4 or event.delta > 0:
+                self.canvas.yview_scroll(-1, "units")
+            elif event.num == 5 or event.delta < 0:
+                self.canvas.yview_scroll(1, "units")
+
+    # ────────── Методы работы с данными ──────────
+    def get_user_data(self, number):
+        if number in Config.TEMP_DB:
+            return copy.deepcopy(Config.TEMP_DB[number])
+        return {"name": "", "rating": 0.0, "reviews": []}
+
+    def add_review(self, number, author, text):
+        if number not in Config.TEMP_DB:
+            Config.TEMP_DB[number] = {"name": "", "rating": 0.0, "reviews": []}
+        Config.TEMP_DB[number]["reviews"].append(
+            {"author": author, "text": text, "approved": False}
+        )
+
+    def approve_review(self, number, idx, callback=None):
+        if number in Config.TEMP_DB and idx < len(Config.TEMP_DB[number]["reviews"]):
+            Config.TEMP_DB[number]["reviews"][idx]["approved"] = True
+            if callback:
+                callback()
+
+    def delete_review(self, number, idx, callback=None):
+        if number in Config.TEMP_DB and idx < len(Config.TEMP_DB[number]["reviews"]):
+            del Config.TEMP_DB[number]["reviews"][idx]
+            if callback:
+                callback()
+
+    # ────────── Модерация ──────────
+    def open_moderation(self):
+        win = tk.Toplevel(self.root)
+        win.title("Модерация отзывов")
+        win.geometry("600x400")
+
+        main_frame = tk.Frame(win)
+        main_frame.pack(fill='both', expand=True)
+
+        canvas = tk.Canvas(main_frame, bg='white')
+        scrollbar = tk.Scrollbar(main_frame, orient='vertical', command=canvas.yview)
+        scrollable = tk.Frame(canvas, bg='white')
+
+        scrollable.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0,0), window=scrollable, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        def refresh():
+            for w in scrollable.winfo_children():
+                w.destroy()
+            pending = []
+            for num, data in Config.TEMP_DB.items():
+                for idx, rev in enumerate(data["reviews"]):
+                    if not rev["approved"]:
+                        pending.append((num, idx, rev))
+            if not pending:
+                tk.Label(scrollable, text="Нет отзывов на модерации", bg='white').pack(pady=10)
+            for num, idx, rev in pending:
+                f = tk.Frame(scrollable, bg='#f9f9f9', relief='groove', bd=2)
+                f.pack(fill='x', padx=5, pady=5)
+                tk.Label(f, text=f"Номер: {num}  |  Автор: {rev['author']}",
+                         bg='#f9f9f9', font=('Arial', 10, 'bold')).pack(anchor='w')
+                tk.Label(f, text=rev['text'], bg='#f9f9f9', wraplength=500,
+                         justify='left').pack(anchor='w', padx=10)
+                btn_frame = tk.Frame(f, bg='#f9f9f9')
+                btn_frame.pack(anchor='e', padx=5, pady=2)
+                tk.Button(btn_frame, text="Одобрить",
+                          command=lambda n=num, i=idx: (self.approve_review(n, i), refresh())
+                         ).pack(side='left', padx=2)
+                tk.Button(btn_frame, text="Удалить",
+                          command=lambda n=num, i=idx: (self.delete_review(n, i), refresh())
+                         ).pack(side='left', padx=2)
+        refresh()
+
+    # ────────── Остальные методы главного экрана ──────────
     def add_hover(self, item, normal, hover):
-        def on_enter(e):
-            self.canvas.itemconfig(item,image=hover)
-        def on_leave(e):
-            self.canvas.itemconfig(item,image=normal)
+        def on_enter(e): self.canvas.itemconfig(item,image=hover)
+        def on_leave(e): self.canvas.itemconfig(item,image=normal)
         self.canvas.tag_bind(item,"<Enter>",on_enter)
         self.canvas.tag_bind(item,"<Leave>",on_leave)
 
-    # ────────── Перетаскивание ──────────
     def start_move(self,event):
         self.offset_x=event.x
         self.offset_y=event.y
@@ -185,14 +420,11 @@ class ANPR_GUI:
         y=self.root.winfo_pointery()-self.offset_y
         self.root.geometry(f"+{x}+{y}")
 
-    # ────────── Загрузка изображения ──────────
     def load_image(self,event=None):
         path=filedialog.askopenfilename()
         if not path: return
-
         img=cv2.imread(path)
         if img is None: return
-
         self.detect(img)
 
     def detect(self,img):
@@ -203,22 +435,22 @@ class ANPR_GUI:
                 x1,y1,x2,y2=map(int,b.xyxy[0])
                 crop=img[y1:y2,x1:x2]
                 text=self.ocr.recognize(crop)
-                detected_text = text   # берём последний (или можно сохранить все)
+                detected_text = text
                 cv2.rectangle(img,(x1,y1),(x2,y2),(0,255,0),2)
                 cv2.putText(img,text,(x1,y1-10),
                             cv2.FONT_HERSHEY_SIMPLEX,0.7,(0,255,0),2)
-
         self.show_result(img)
         if detected_text:
-            self.manual_number.set(detected_text)   # запишем в переменную
+            self.manual_number.set(detected_text)
+        # Показываем поле ввода и кнопку профиля
+        self.canvas.itemconfig(self.manual_entry_window, state="normal")
+        self.canvas.itemconfig(self.profile_btn_id, state="normal")
 
     def show_result(self,img):
         self.canvas.delete(self.upload_id)
-
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(img).resize((self.btn_upload.width(), self.btn_upload.height()))
         self.result_img = ImageTk.PhotoImage(img)
-
         self.result_image_id = self.canvas.create_image(455, 257, image=self.result_img)
 
         w = self.btn_upload.width()//2
@@ -241,29 +473,39 @@ class ANPR_GUI:
         self.upload_id = self.canvas.create_image(455,257, image=self.btn_upload)
         self.add_hover(self.upload_id, self.btn_upload, self.btn_upload_h)
         self.canvas.tag_bind(self.upload_id, "<Button-1>", self.load_image)
+
+        self.canvas.itemconfig(self.manual_entry_window, state="hidden")
+        self.canvas.itemconfig(self.profile_btn_id, state="hidden")
         self.manual_number.set("")
 
     def toggle_manual_entry(self, event=None):
-        current_state = self.canvas.itemcget(self.manual_entry_window, "state")
-        if current_state == "hidden":
+        cur = self.canvas.itemcget(self.manual_entry_window, "state")
+        if cur == "hidden":
             self.canvas.itemconfig(self.manual_entry_window, state="normal")
+            self.canvas.itemconfig(self.profile_btn_id, state="normal")
             self.manual_entry.focus_set()
         else:
             self.canvas.itemconfig(self.manual_entry_window, state="hidden")
-            self.manual_number.set("")   # очищаем при скрытии? Можно оставить
+            self.canvas.itemconfig(self.profile_btn_id, state="hidden")
+            self.manual_number.set("")
 
+    def submit_number(self, event=None):
+        number = self.manual_number.get().strip()
+        if number:
+            self.show_profile(number)
+
+    # ────────── Сворачивание в трей ──────────
     def minimize_to_tray(self, event=None):
-        self.root.withdraw()   # скрыть окно
-        if self.tray_icon:
+        self.root.withdraw()
+        if not self.tray_thread or not self.tray_thread.is_alive():
             import threading
-            if not hasattr(self, 'tray_thread') or not self.tray_thread.is_alive():
-                self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
-                self.tray_thread.start()
+            self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+            self.tray_thread.start()
 
     def show_window(self):
-        self.root.deiconify()     # показать окно
+        self.root.deiconify()
         if self.tray_icon:
-            self.tray_icon.stop()  # остановить иконку (будет перезапущена при следующем сворачивании)
+            self.tray_icon.stop()
         self.tray_thread = None
 
     def quit_app(self):
