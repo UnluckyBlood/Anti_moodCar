@@ -113,7 +113,7 @@ class ANPR_GUI:
         self.ocr=CRNNRecognizer(Config.OCR_MODEL_PATH,Config.OCR_ALPHABET)
         print("Готово!")
 
-        # ────────── Загрузка изображений (сохраняем как атрибуты) ──────────
+        # Загрузка изображений
         self.bg=ImageTk.PhotoImage(Image.open("bg_main.png"))
         self.top_bar=ImageTk.PhotoImage(Image.open("top_bar.png"))
         self.btn_upload=ImageTk.PhotoImage(Image.open("btn_upload.png"))
@@ -128,21 +128,22 @@ class ANPR_GUI:
         self.canvas=tk.Canvas(root,width=910,height=605,highlightthickness=0)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Поле ручного ввода (создаём один раз)
+        # Поле ручного ввода (создаётся один раз)
         self.manual_number = tk.StringVar()
         self.manual_entry = tk.Entry(self.root, font=("Arial", 14), justify="center",
                                      textvariable=self.manual_number)
-        self.manual_entry.bind("<Return>", self.submit_number)
+        # Кнопка подтверждения (создаётся один раз)
+        self.confirm_btn = tk.Button(self.root, text="Подтвердить", font=("Arial", 12),
+                                     command=self.submit_number)
 
-        # Флаги и дополнительные атрибуты
+        # Вспомогательные идентификаторы
         self.result_image_id = None
         self.clear_btn_id = None
-        self.profile_btn_id = None
         self.profile_page_active = False
         self.scrollbar = None
         self.back_btn = None
 
-        # ────────── Трей ──────────
+        # Трей
         try:
             tray_img = PILImage.open("icon.ico")
         except:
@@ -162,7 +163,7 @@ class ANPR_GUI:
 
     # ────────── Главный экран ──────────
     def show_main(self):
-        # Убираем элементы страницы профиля, если они есть
+        # Сброс режима профиля
         if self.profile_page_active:
             self.canvas.unbind_all("<MouseWheel>")
             self.canvas.unbind_all("<Button-4>")
@@ -177,11 +178,11 @@ class ANPR_GUI:
                 self.back_btn = None
             self.profile_page_active = False
 
-        # Очищаем canvas и настраиваем его для главного экрана
+        # Очистка canvas и возврат к фиксированному размеру
         self.canvas.delete("all")
         self.canvas.config(width=910, height=605, yscrollcommand="")
 
-        # Рисуем фон и верхнюю панель
+        # Фон и верхняя панель
         self.canvas.create_image(0,0,anchor=tk.NW,image=self.bg)
         self.top_bar_id = self.canvas.create_image(0,0,anchor=tk.NW,image=self.top_bar)
 
@@ -191,15 +192,20 @@ class ANPR_GUI:
         self.close_id = self.canvas.create_image(899,12,image=self.btn_close)
         self.min_id = self.canvas.create_image(850,12,image=self.btn_min)
 
-        # Поле ручного ввода (скрыто по умолчанию)
-        self.manual_entry_window = self.canvas.create_window(455, 575, window=self.manual_entry,
-                                                             state="hidden", width=200)
+        # Поле ввода и кнопка подтверждения (скрыты)
+        self.manual_entry_window = self.canvas.create_window(
+            455, 560, window=self.manual_entry, state="hidden", width=200
+        )
+        self.confirm_btn_window = self.canvas.create_window(
+            455, 590, window=self.confirm_btn, state="hidden"
+        )
 
-        # Кнопка "Смотреть профиль" (скрыта по умолчанию)
-        self.profile_btn_id = self.canvas.create_text(455, 320, text="[ Смотреть профиль ]",
-                                                      font=("Arial", 12, "underline"), fill="blue",
-                                                      activefill="darkblue", state="hidden")
-        self.canvas.tag_bind(self.profile_btn_id, "<Button-1>", self.submit_number)
+        # Кнопка модерации (текст)
+        self.moderation_id = self.canvas.create_text(
+            800, 30, text="Мод.", font=("Arial", 10, "underline"), fill="white",
+            activefill="lightgray"
+        )
+        self.canvas.tag_bind(self.moderation_id, "<Button-1>", lambda e: self.open_moderation())
 
         # Ховер-эффекты
         self.add_hover(self.upload_id, self.btn_upload, self.btn_upload_h)
@@ -225,35 +231,45 @@ class ANPR_GUI:
         self.profile_page_active = True
         self.canvas.delete("all")
 
-        # Настраиваем canvas под скроллбар
+        # Настройка прокрутки
         self.canvas.config(width=895, height=605)
         self.scrollbar = tk.Scrollbar(self.root, orient=tk.VERTICAL, command=self.canvas.yview)
         self.scrollbar.place(x=895, y=0, height=605)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
-        # Кнопка назад (поверх всего)
+        # Кнопка «Назад»
         self.back_btn = tk.Label(self.root, text="← Назад", font=("Arial", 12, "underline"),
                                  fg="blue", bg="#f0f0f0", cursor="hand2")
         self.back_btn.place(x=10, y=10)
         self.back_btn.bind("<Button-1>", lambda e: self.show_main())
 
-        # Прокручиваемый фрейм
+        # Прокручиваемая область
         profile_frame = tk.Frame(self.canvas, bg='#f0f0f0')
         self.canvas.create_window((0, 0), window=profile_frame, anchor='nw')
         profile_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
-        # Получаем данные пользователя
+        # Данные пользователя
         user_data = self.get_user_data(number)
 
-        # Номер машины
-        tk.Label(profile_frame, text=number, font=("Arial", 28, "bold"), bg='#f0f0f0').pack(pady=(20, 10))
+        # Номер
+        tk.Label(profile_frame, text=number, font=("Arial", 28, "bold"),
+                 bg='#f0f0f0').pack(pady=(30, 5))
+
+        # Имя
+        name = user_data.get("name", "")
+        if name:
+            tk.Label(profile_frame, text=name, font=("Arial", 16), bg='#f0f0f0').pack(pady=5)
+        else:
+            tk.Label(profile_frame, text="Имя не указано", font=("Arial", 16, "italic"),
+                     fg="gray", bg='#f0f0f0').pack(pady=5)
 
         # Рейтинг
         rating = user_data.get("rating", 0.0)
-        tk.Label(profile_frame, text=f"Рейтинг: {rating}", font=("Arial", 16), bg='#f0f0f0').pack(pady=5)
+        tk.Label(profile_frame, text=f"Рейтинг: {rating}", font=("Arial", 14),
+                 bg='#f0f0f0').pack(pady=5)
 
         # Разделитель
-        ttk.Separator(profile_frame, orient='horizontal').pack(fill='x', padx=20, pady=10)
+        ttk.Separator(profile_frame, orient='horizontal').pack(fill='x', padx=20, pady=15)
 
         # Блок отзывов
         reviews_frame = tk.Frame(profile_frame, bg='#f0f0f0')
@@ -264,18 +280,24 @@ class ANPR_GUI:
                 widget.destroy()
             approved = [r for r in user_data["reviews"] if r["approved"]]
             if not approved:
-                tk.Label(reviews_frame, text="Нет отзывов", bg='#f0f0f0', font=("Arial", 10)).pack()
+                tk.Label(reviews_frame, text="Пока нет отзывов", bg='#f0f0f0',
+                         font=("Arial", 10)).pack()
             for rev in approved:
                 cont = tk.Frame(reviews_frame, bg='white', relief='groove', bd=2)
                 cont.pack(fill='x', pady=5, padx=5)
                 tk.Label(cont, text=f"Автор: {rev['author']}", bg='white',
                          font=("Arial", 10, "bold")).pack(anchor='w')
                 tk.Label(cont, text=rev['text'], bg='white', font=("Arial", 9),
-                         wraplength=800, justify='left').pack(anchor='w', padx=10, pady=5)
+                         wraplength=780, justify='left').pack(anchor='w', padx=10, pady=5)
 
         refresh_reviews()
 
-        # Кнопка открытия формы отзыва
+        # Кнопка добавления отзыва
+        review_btn = tk.Button(profile_frame, text="Оставить отзыв",
+                               command=lambda: toggle_review_form())
+        review_btn.pack(pady=10)
+
+        # Форма отзыва (скрыта)
         form_visible = False
         review_form_frame = tk.Frame(profile_frame, bg='#e0e0e0', relief='sunken', bd=2)
 
@@ -288,15 +310,11 @@ class ANPR_GUI:
                 review_form_frame.pack(before=review_btn, fill='x', padx=20, pady=10)
                 form_visible = True
 
-        review_btn = tk.Button(profile_frame, text="Оставить отзыв", command=toggle_review_form)
-        review_btn.pack(pady=10)
-
-        # Поля формы
-        tk.Label(review_form_frame, text="Автор:", bg='#e0e0e0').pack(anchor='w', padx=5, pady=2)
+        tk.Label(review_form_frame, text="Ваше имя:", bg='#e0e0e0').pack(anchor='w', padx=5, pady=2)
         author_entry = tk.Entry(review_form_frame, width=30)
         author_entry.pack(padx=5, pady=2)
         author_entry.insert(0, "Аноним")
-        tk.Label(review_form_frame, text="Отзыв:", bg='#e0e0e0').pack(anchor='w', padx=5, pady=2)
+        tk.Label(review_form_frame, text="Текст отзыва:", bg='#e0e0e0').pack(anchor='w', padx=5, pady=2)
         text_entry = tk.Text(review_form_frame, height=4, width=60)
         text_entry.pack(padx=5, pady=2)
 
@@ -309,7 +327,7 @@ class ANPR_GUI:
             review_form_frame.pack_forget()
             nonlocal form_visible
             form_visible = False
-            # обновляем отзывы на странице
+            # обновляем список отзывов
             nonlocal user_data
             user_data = self.get_user_data(number)
             refresh_reviews()
@@ -332,7 +350,13 @@ class ANPR_GUI:
             elif event.num == 5 or event.delta < 0:
                 self.canvas.yview_scroll(1, "units")
 
-    # ────────── Методы работы с данными ──────────
+    # ────────── Подтверждение номера ──────────
+    def submit_number(self):
+        number = self.manual_number.get().strip()
+        if number:
+            self.show_profile(number)
+
+    # ────────── Работа с данными ──────────
     def get_user_data(self, number):
         if number in Config.TEMP_DB:
             return copy.deepcopy(Config.TEMP_DB[number])
@@ -357,7 +381,7 @@ class ANPR_GUI:
             if callback:
                 callback()
 
-    # ────────── Модерация ──────────
+    # ────────── Модерация отзывов ──────────
     def open_moderation(self):
         win = tk.Toplevel(self.root)
         win.title("Модерация отзывов")
@@ -404,7 +428,7 @@ class ANPR_GUI:
                          ).pack(side='left', padx=2)
         refresh()
 
-    # ────────── Остальные методы главного экрана ──────────
+    # ────────── Вспомогательные методы главного экрана ──────────
     def add_hover(self, item, normal, hover):
         def on_enter(e): self.canvas.itemconfig(item,image=hover)
         def on_leave(e): self.canvas.itemconfig(item,image=normal)
@@ -442,9 +466,10 @@ class ANPR_GUI:
         self.show_result(img)
         if detected_text:
             self.manual_number.set(detected_text)
-        # Показываем поле ввода и кнопку профиля
+        # Показываем поле ввода и кнопку подтверждения
         self.canvas.itemconfig(self.manual_entry_window, state="normal")
-        self.canvas.itemconfig(self.profile_btn_id, state="normal")
+        self.canvas.itemconfig(self.confirm_btn_window, state="normal")
+        self.manual_entry.focus_set()
 
     def show_result(self,img):
         self.canvas.delete(self.upload_id)
@@ -475,24 +500,19 @@ class ANPR_GUI:
         self.canvas.tag_bind(self.upload_id, "<Button-1>", self.load_image)
 
         self.canvas.itemconfig(self.manual_entry_window, state="hidden")
-        self.canvas.itemconfig(self.profile_btn_id, state="hidden")
+        self.canvas.itemconfig(self.confirm_btn_window, state="hidden")
         self.manual_number.set("")
 
     def toggle_manual_entry(self, event=None):
-        cur = self.canvas.itemcget(self.manual_entry_window, "state")
-        if cur == "hidden":
+        cur_state = self.canvas.itemcget(self.manual_entry_window, "state")
+        if cur_state == "hidden":
             self.canvas.itemconfig(self.manual_entry_window, state="normal")
-            self.canvas.itemconfig(self.profile_btn_id, state="normal")
+            self.canvas.itemconfig(self.confirm_btn_window, state="normal")
             self.manual_entry.focus_set()
         else:
             self.canvas.itemconfig(self.manual_entry_window, state="hidden")
-            self.canvas.itemconfig(self.profile_btn_id, state="hidden")
+            self.canvas.itemconfig(self.confirm_btn_window, state="hidden")
             self.manual_number.set("")
-
-    def submit_number(self, event=None):
-        number = self.manual_number.get().strip()
-        if number:
-            self.show_profile(number)
 
     # ────────── Сворачивание в трей ──────────
     def minimize_to_tray(self, event=None):
