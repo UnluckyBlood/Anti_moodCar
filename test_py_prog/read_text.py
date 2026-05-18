@@ -200,8 +200,6 @@ class ANPR_GUI:
         self.clear_btn_id = None
 
         self.show_login()
-
-    # ======================== TRAY =========================
     def minimize_to_tray(self, event=None):
         self.root.withdraw()
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
@@ -214,7 +212,6 @@ class ANPR_GUI:
         self.tray_icon.stop()
         self.root.destroy()
 
-    # ======================== LOGIN ========================
     def show_login(self):
         # Удаляем старые элементы с других экранов
         for attr in ['back_label', 'menu_btn']:
@@ -258,7 +255,6 @@ class ANPR_GUI:
                        font=("Arial",13,"bold"), relief="flat", cursor="hand2", command=do_login)
         self.canvas.create_window(455,410, window=btn, width=180, height=42)
 
-    # ======================== MAIN =========================
     def show_main(self):
         # Очистка старых виджетов
         for attr in ['back_label', 'menu_btn']:
@@ -314,7 +310,6 @@ class ANPR_GUI:
         self.confirm_btn_window = self.canvas.create_window(455,592, window=self.confirm_btn,
                                                             state="hidden")
 
-    # ======================== SIDEBAR ======================
     def toggle_sidebar(self):
         if self.sidebar:
             self.sidebar.destroy()
@@ -335,7 +330,6 @@ class ANPR_GUI:
         btn.bind("<Leave>", lambda e: btn.config(bg="#34275a"))
         btn.bind("<Button-1>", lambda e: cmd())
 
-    # ======================== OCR / IMAGE ==================
     def load_image(self, event=None):
         path = filedialog.askopenfilename()
         if not path:
@@ -386,7 +380,6 @@ class ANPR_GUI:
         self.add_hover(self.upload_id, self.btn_upload, self.btn_upload_h)
         self.canvas.tag_bind(self.upload_id, "<Button-1>", self.load_image)
 
-    # ======================== PROFILE ======================
     def show_profile(self, number):
         self.canvas.delete("all")
         # удаляем оставшуюся кнопку Назад с предыдущего экрана
